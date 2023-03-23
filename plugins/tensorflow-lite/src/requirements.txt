@@ -9,8 +9,11 @@ pycoral~=2.0
 PyGObject>=3.30.4; sys_platform != 'win32'
 # libav doesnt work on arm7
 av>=10.0.0; sys_platform != 'linux' or platform_machine == 'x86_64' or platform_machine == 'aarch64'
-tflite-runtime==2.5.0.post1
+tflite-runtime==2.5.0.post1; sys_platform != 'linux'
+tensorflow-macos; sys_platform == 'darwin'
+tensorflow; sys_platform == 'win32'
 
 # sort_oh
 scipy
 filterpy
+

@@ -1,18 +1,24 @@
 from __future__ import annotations
-import threading
-from .common import *
+from .pycoral_common import *
 from PIL import Image
-from pycoral.adapters import detect
+from . import pycoral_detect
+import platform
+
 loaded_py_coral = False
 try:
+    raise
     from pycoral.utils.edgetpu import list_edge_tpus
-    from pycoral.utils.edgetpu import make_interpreter
+    # from pycoral.utils.edgetpu import make_interpreter
     loaded_py_coral = True
     print('coral edge tpu library loaded successfully')
 except Exception as e:
     print('coral edge tpu library load failed', e)
     pass
-import tflite_runtime.interpreter as tflite
+try:
+    raise
+    from tflite_runtime.interpreter import Interpreter, load_delegate
+except:
+    from tensorflow.lite.python.interpreter import Interpreter, load_delegate
 import re
 import scrypted_sdk
 from scrypted_sdk.types import Setting
@@ -21,6 +27,12 @@ from predict import PredictPlugin
 import concurrent.futures
 import queue
 import asyncio
+
+_EDGETPU_SHARED_LIB = {
+  'Linux': 'libedgetpu.so.1',
+  'Darwin': 'libedgetpu.1.dylib',
+  'Windows': 'edgetpu.dll'
+}[platform.system()]
 
 def parse_label_contents(contents: str):
     lines = contents.splitlines()
@@ -50,7 +62,8 @@ class TensorFlowLitePlugin(PredictPlugin, scrypted_sdk.BufferConverter, scrypted
         self.interpreter_count = 0
 
         try:
-            edge_tpus = list_edge_tpus()
+            # edge_tpus = list_edge_tpus()
+            edge_tpus = []
             print('edge tpus', edge_tpus)
             if not len(edge_tpus):
                 raise Exception('no edge tpu found')
@@ -61,7 +74,11 @@ class TensorFlowLitePlugin(PredictPlugin, scrypted_sdk.BufferConverter, scrypted
             #     'fs/mobilenet_ssd_v2_face_quant_postprocess.tflite').read()
             for idx, edge_tpu in enumerate(edge_tpus):
                 try:
-                    interpreter = make_interpreter(edgetpuFile, ":%s" % idx)
+                    edge_tpu_delegate = load_delegate(_EDGETPU_SHARED_LIB, {"device": "usb"})
+                    interpreter = Interpreter(
+                        model_path=edgetpuFile,
+                        experimental_delegates=[edge_tpu_delegate],
+                    )
                     interpreter.allocate_tensors()
                     _, height, width, channels = interpreter.get_input_details()[
                             0]['shape']
@@ -80,7 +97,10 @@ class TensorFlowLitePlugin(PredictPlugin, scrypted_sdk.BufferConverter, scrypted
             self.edge_tpu_found = 'Edge TPU not found'
             # face_model = scrypted_sdk.zip.open(
             #     'fs/mobilenet_ssd_v2_face_quant_postprocess.tflite').read()
-            interpreter = tflite.Interpreter(model_path=tfliteFile)
+            interpreter = Interpreter(
+                model_path=tfliteFile,
+                num_threads=3,
+            )
             interpreter.allocate_tensors()
             _, height, width, channels = interpreter.get_input_details()[
                     0]['shape']
@@ -116,13 +136,13 @@ class TensorFlowLitePlugin(PredictPlugin, scrypted_sdk.BufferConverter, scrypted
         def predict():
             interpreter = self.interpreters.get()
             try:
-                common.set_input(
+                pycoral_common.set_input(
                     interpreter, input)
                 scale = (1, 1)
                 # _, scale = common.set_resized_input(
                 #     self.interpreter, cropped.size, lambda size: cropped.resize(size, Image.ANTIALIAS))
                 interpreter.invoke()
-                objs = detect.get_objects(
+                objs = pycoral_detect.get_objects(
                     interpreter, score_threshold=.2, image_scale=scale)
                 return objs
             except:
