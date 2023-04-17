@@ -17,7 +17,7 @@ const { systemManager } = sdk;
 const defaultDetectionDuration = 20;
 const defaultDetectionInterval = 60;
 const defaultDetectionTimeout = 60;
-const defaultMotionDuration = 10;
+const defaultMotionDuration = 20;
 
 const BUILTIN_MOTION_SENSOR_ASSIST = 'Assist';
 const BUILTIN_MOTION_SENSOR_REPLACE = 'Replace';
@@ -265,7 +265,7 @@ class ObjectDetectionMixin extends SettingsMixinDeviceBase<VideoCamera & Camera 
       snapshotPipeline: this.plugin.shouldUseSnapshotPipeline(),
     };
 
-    this.runPipelineAnalysis(signal, options)
+    this.runPipelineAnalysisLoop(signal, options)
       .catch(e => {
         this.console.error('Video Analysis ended with error', e);
       }).finally(() => {
@@ -277,8 +277,24 @@ class ObjectDetectionMixin extends SettingsMixinDeviceBase<VideoCamera & Camera 
       });
   }
 
+  async runPipelineAnalysisLoop(signal: Deferred<void>, options: {
+    snapshotPipeline: boolean,
+    suppress?: boolean,
+  }) {
+    while (!signal.finished) {
+      const shouldSleep = await this.runPipelineAnalysis(signal, options);
+      options.suppress = true;
+      if (!shouldSleep || signal.finished)
+        return;
+      // sleep until a moment before motion duration to start peeking again
+      // to have an opporunity to reset the motion timeout.
+      await sleep(this.storageSettings.values.motionDuration * 1000 - 4000);
+    }
+  }
+
   async runPipelineAnalysis(signal: Deferred<void>, options: {
     snapshotPipeline: boolean,
+    suppress?: boolean,
   }) {
     const start = Date.now();
     this.analyzeStop = start + this.getDetectionDuration();
@@ -344,7 +360,6 @@ class ObjectDetectionMixin extends SettingsMixinDeviceBase<VideoCamera & Camera 
           }
         }
         finally {
-          self.console.log('Snapshot generation finished.');
         }
       })();
     }
@@ -353,7 +368,8 @@ class ObjectDetectionMixin extends SettingsMixinDeviceBase<VideoCamera & Camera 
       const videoFrameGenerator = systemManager.getDeviceById<VideoFrameGenerator>(newPipeline);
       if (!videoFrameGenerator)
         throw new Error('invalid VideoFrameGenerator');
-      this.console.log(videoFrameGenerator.name, '+', this.objectDetection.name);
+      if (!options?.suppress)
+        this.console.log(videoFrameGenerator.name, '+', this.objectDetection.name);
       updatePipelineStatus('getVideoStream');
       const stream = await this.cameraDevice.getVideoStream({
         destination,
@@ -422,14 +438,19 @@ class ObjectDetectionMixin extends SettingsMixinDeviceBase<VideoCamera & Camera 
         this.setDetection(detected.detected, mo);
         // this.console.log('image saved', detected.detected.detections);
       }
+      const hadMotionDetected = this.motionDetected;
       this.reportObjectDetections(detected.detected);
       if (this.hasMotionType) {
+        if (!hadMotionDetected && this.motionDetected) {
+          // if new motion is detected, stop processing and exit loop allowing it to sleep.
+          clearInterval(interval);
+          return true;
+        }
         await sleep(250);
       }
       updatePipelineStatus('waiting result');
       // this.handleDetectionEvent(detected.detected);
     }
-
   }
 
   normalizeBox(boundingBox: [number, number, number, number], inputDimensions: [number, number]) {
